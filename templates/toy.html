@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Title</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<p>DeviceKey:<input type="text" id="device_key">
+  <button onclick="open_toy()">开启玩具</button>
+</p>
+<audio autoplay controls id="player"></audio>
+<p>消息来自:<span id="from_user"></span></p>
+<p>类型:<span id="friend_type"></span></p>
+<p>
+  <button onclick="start_reco()" style="background-color: yellow">录制声音</button>
+  <button onclick="reco_ai()" style="background-color: orange">发送语音指令</button>
+</p>
+<p><button onclick="stop_reco_audio()" style="background-color: blue">发送消息</button></p>
+<p><button onclick="recv_msg()" style="background-color: cornflowerblue">收取消息</button></p>
+
+
+</body>
+<script type="application/javascript" src="/static/jQuery3.1.1.js"></script>
+<script type="application/javascript" src="/static/Recorder.js"></script>
+<script type="application/javascript">
+  var serv = "http://192.168.13.36:9527";
+  var serv_ws = "ws://192.168.13.36:3721/toy/";
+  var ws = null;
+  var toy_id = null;
+
+  function open_toy() {
+    var device_key = document.getElementById("device_key").value;
+    $.post(serv + "/device_login", {device_key: device_key}, function (data) {
+      console.log(data);
+      document.getElementById("player").src = serv + "/get_music/" + data.music;
+      //alert(data.info);
+      toy_id= data.info;
+      create_ws(serv_ws,toy_id)
+
+    }, "json");
+
+  }
+
+  function create_ws(serv_ws,toy_id) {
+    ws = new WebSocket(serv_ws + toy_id);
+    ws.onopen = function () {
+      console.log(ws);
+    };
+    ws.onmessage = function (data) {
+      console.log(data.data);
+      var msg = JSON.parse(data.data);
+      if (msg.music) {
+        document.getElementById("player").src = serv + "/get_music/" + msg.music;
+      } else {
+        document.getElementById("player").src = serv + "/get_chat/" + msg.chat;
+        document.getElementById("from_user").innerText = msg.from_user;
+        document.getElementById("friend_type").innerText = msg.friend_type;
+      }
+    };
+    ws.onclose = function () { //123456
+      create_ws(serv_ws,toy_id);
+    }
+  }
+
+  function recv_msg() {
+    $.post(serv + "/recv_msg",{
+      to_user:toy_id,
+      from_user:document.getElementById("from_user").innerText
+    },function (data) {
+      console.log(data);
+      var player = document.getElementById("player");
+      document.getElementById("from_user").innerText = data.from_user;
+      document.getElementById("friend_type").innerText = data.friend_type;
+
+      player.src = serv + "/get_chat/" +  data.chat_list.shift().msg;
+      player.onended = function () {
+        if(data.chat_list.length == 0){
+          return
+        }
+        player.src = serv + "/get_chat/" +  data.chat_list.shift().msg;
+      }
+    },"json")
+  }
+
+
+  var reco = null;
+  var audio_context = new AudioContext();
+  navigator.getUserMedia = (navigator.getUserMedia ||
+    navigator.webkitGetUserMedia ||
+    navigator.mozGetUserMedia ||
+    navigator.msGetUserMedia);
+
+  navigator.getUserMedia({audio: true}, create_stream, function (err) {
+    console.log(err)
+  });
+
+  function create_stream(user_media) {
+    var stream_input = audio_context.createMediaStreamSource(user_media);
+    reco = new Recorder(stream_input);
+  }
+
+  function start_reco() {
+    reco.record();
+  }
+
+
+  function stop_reco_audio() {
+    reco.stop();
+    send_audio();
+    reco.clear();
+  }
+
+  function reco_ai() {
+    reco.stop();
+    send_ai();
+    reco.clear();
+  }
+
+
+  function send_audio() {
+    reco.exportWAV(function (wav_file) {
+      var formdata = new FormData();
+      formdata.append("record", wav_file);
+      formdata.append("to_user",document.getElementById("from_user").innerText);
+      formdata.append("from_user",toy_id);
+      console.log(formdata);
+      $.ajax({
+        url: serv + "/toy_uploader",
+        type: 'post',
+        processData: false,
+        contentType: false,
+        data: formdata,
+        dataType: 'json',
+        success: function (data) {
+          if(data.code == 0){
+            var send_str = {
+              "to_user":document.getElementById("from_user").innerText,
+              "from_user":toy_id,
+              "friend_type":document.getElementById("friend_type").innerText,
+              "filename":data.filename
+            };
+            var send_json = JSON.stringify(send_str);
+            ws.send(send_json);
+          }
+        }
+      });
+
+    })
+  }
+
+  function send_ai() {
+    reco.exportWAV(function (wav_file) {
+      var formdata = new FormData();
+      formdata.append("record", wav_file);
+      formdata.append("to_user",document.getElementById("from_user").innerText);
+      formdata.append("from_user",toy_id);
+      console.log(formdata);
+      $.ajax({
+        url: serv + "/ai_uploader",
+        type: 'post',
+        processData: false,
+        contentType: false,
+        data: formdata,
+        dataType: 'json',
+        success: function (data) {
+          console.log(data);
+          document.getElementById("from_user").innerText = data.from_user;
+          document.getElementById("friend_type").innerText = data.friend_type;
+          if(data.chat){
+            document.getElementById("player").src = serv + "/get_chat/" + data.chat;
+          }else{
+            document.getElementById("player").src = serv + "/get_music/" + data.music;
+          }
+
+        }
+      });
+
+    })
+  }
+
+</script>
+</html>
